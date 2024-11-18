@@ -1,0 +1,111 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+
+// Configuração do WiFi
+const char* ssid = "Nina_2G";
+const char* password = "Internet1003#";
+
+// Configuração do InfluxDB
+const char* influxServer = "http://raspberrypi.local:8086/write?db=IOT_DB";
+const String measurement = "refrigerator_temp";
+
+// Pinos dos sensores DS18B20
+#define ONE_WIRE_BUS_REFRIGERATOR 5  // GPIO5 (D1 no ESP8266)
+#define ONE_WIRE_BUS_FREEZER 4       // GPIO4 (D2 no ESP8266)
+
+// Configurar o protocolo OneWire para cada sensor
+OneWire oneWireRefrigerator(ONE_WIRE_BUS_REFRIGERATOR);
+OneWire oneWireFreezer(ONE_WIRE_BUS_FREEZER);
+
+// Configurar a biblioteca DallasTemperature com o protocolo OneWire
+DallasTemperature refrigeratorSensor(&oneWireRefrigerator);
+DallasTemperature freezerSensor(&oneWireFreezer);
+
+void setup() {
+  // Inicializar a comunicação serial
+  Serial.begin(115200);
+  
+  // Inicializar os sensores DS18B20
+  refrigeratorSensor.begin();
+  freezerSensor.begin();
+  
+  // Conectar ao WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Conectando ao WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConectado ao WiFi");
+}
+
+void loop() {
+  // Solicitar leituras de temperatura
+  refrigeratorSensor.requestTemperatures();
+  freezerSensor.requestTemperatures();
+  
+  // Ler as temperaturas em Celsius
+  float TempRefrigerator = refrigeratorSensor.getTempCByIndex(0);
+  float freezerTemp = freezerSensor.getTempCByIndex(0);
+  
+  // Verificar e exibir as temperaturas no Monitor Serial
+  if (TempRefrigerator != DEVICE_DISCONNECTED_C) {
+    Serial.print("TempRefrigerator: ");
+    Serial.print(TempRefrigerator);
+    Serial.println(" °C");
+  } else {
+    Serial.println("Sensor de geladeira desconectado!");
+  }
+  
+  if (freezerTemp != DEVICE_DISCONNECTED_C) {
+    Serial.print("FreezerTemp: ");
+    Serial.print(freezerTemp);
+    Serial.println(" °C");
+  } else {
+    Serial.println("Sensor de freezer desconectado!");
+  }
+
+  // Enviar os dados para o InfluxDB
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+    
+    // Dados do sensor da geladeira
+    if (TempRefrigerator != DEVICE_DISCONNECTED_C) {
+      String dataRefrigerator = measurement + " TempRefrigerator=" + String(TempRefrigerator);
+      http.begin(client, influxServer);
+      http.addHeader("Content-Type", "text/plain");
+      int httpResponseCode = http.POST(dataRefrigerator);
+      if (httpResponseCode > 0) {
+        Serial.println("Dados da geladeira enviados ao InfluxDB com sucesso");
+      } else {
+        Serial.print("Erro ao enviar dados da geladeira: ");
+        Serial.println(httpResponseCode);
+      }
+      http.end();
+    }
+
+    // Dados do sensor do freezer
+    if (freezerTemp != DEVICE_DISCONNECTED_C) {
+      String dataFreezer = measurement + " FreezerTemp=" + String(freezerTemp);
+      http.begin(client, influxServer);
+      http.addHeader("Content-Type", "text/plain");
+      int httpResponseCode = http.POST(dataFreezer);
+      if (httpResponseCode > 0) {
+        Serial.println("Dados do freezer enviados ao InfluxDB com sucesso");
+      } else {
+        Serial.print("Erro ao enviar dados do freezer: ");
+        Serial.println(httpResponseCode);
+      }
+      http.end();
+    }
+  } else {
+    Serial.println("WiFi desconectado, tentando reconectar...");
+    WiFi.begin(ssid, password);
+  }
+
+  // Aguardar 1 segundo antes de uma nova leitura
+  delay(1000);
+}
